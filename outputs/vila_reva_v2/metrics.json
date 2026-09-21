@@ -1,0 +1,100 @@
+{
+  "num_questions": 4000,
+  "num_answered": 4000,
+  "num_correct": 1940,
+  "accuracy": 0.485,
+  "by_category": {
+    "Factual Perception": {
+      "num_questions": 1340,
+      "num_answered": 1340,
+      "num_correct": 737,
+      "accuracy": 0.55
+    },
+    "Temporal Understanding": {
+      "num_questions": 1000,
+      "num_answered": 1000,
+      "num_correct": 370,
+      "accuracy": 0.37
+    },
+    "Spatial Reasoning": {
+      "num_questions": 1220,
+      "num_answered": 1220,
+      "num_correct": 536,
+      "accuracy": 0.43934426229508194
+    },
+    "Causal Reasoning": {
+      "num_questions": 440,
+      "num_answered": 440,
+      "num_correct": 297,
+      "accuracy": 0.675
+    }
+  },
+  "by_subcategory": {
+    "Object and Land Cover Recognition": {
+      "num_questions": 660,
+      "num_answered": 660,
+      "num_correct": 355,
+      "accuracy": 0.5378787878787878
+    },
+    "Change Detection": {
+      "num_questions": 500,
+      "num_answered": 500,
+      "num_correct": 230,
+      "accuracy": 0.46
+    },
+    "Temporal Grounding": {
+      "num_questions": 640,
+      "num_answered": 640,
+      "num_correct": 198,
+      "accuracy": 0.309375
+    },
+    "General Understanding": {
+      "num_questions": 180,
+      "num_answered": 180,
+      "num_correct": 152,
+      "accuracy": 0.8444444444444444
+    },
+    "Trend and Pattern": {
+      "num_questions": 360,
+      "num_answered": 360,
+      "num_correct": 172,
+      "accuracy": 0.4777777777777778
+    },
+    "Structural Layout": {
+      "num_questions": 340,
+      "num_answered": 340,
+      "num_correct": 176,
+      "accuracy": 0.5176470588235295
+    },
+    "Perspective and Viewpoint": {
+      "num_questions": 480,
+      "num_answered": 480,
+      "num_correct": 208,
+      "accuracy": 0.43333333333333335
+    },
+    "Causation Reasoning": {
+      "num_questions": 180,
+      "num_answered": 180,
+      "num_correct": 135,
+      "accuracy": 0.75
+    },
+    "Consequence Reasoning": {
+      "num_questions": 100,
+      "num_answered": 100,
+      "num_correct": 77,
+      "accuracy": 0.77
+    },
+    "Hypothetical Reasoning": {
+      "num_questions": 160,
+      "num_answered": 160,
+      "num_correct": 85,
+      "accuracy": 0.53125
+    },
+    "Geometric Relation": {
+      "num_questions": 400,
+      "num_answered": 400,
+      "num_correct": 152,
+      "accuracy": 0.38
+    }
+  }
+}

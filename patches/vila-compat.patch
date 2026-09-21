@@ -1,0 +1,161 @@
+diff --git a/llava/model/__init__.py b/llava/model/__init__.py
+--- a/llava/model/__init__.py
++++ b/llava/model/__init__.py
+@@ -26,5 +26,3 @@
+ 3. fp8 infernce example (load directly from a fp8 and fwd)
+ 4. bind fp8 related configs to QLlamaConfig {"coat_fp8_args": {}}
+ """
+-from .language_model.fp8linearqwen2 import FP8LinearQwen2Config, FP8LinearQwen2Model
+-from .language_model.qllava_qllama import QLlavaLlamaConfig, QLlavaLlamaModel
+diff --git a/llava/model/configuration_llava.py b/llava/model/configuration_llava.py
+--- a/llava/model/configuration_llava.py
++++ b/llava/model/configuration_llava.py
+@@ -79,7 +79,7 @@
+         self.mm_hidden_size = mm_hidden_size
+         self.image_aspect_ratio = image_aspect_ratio
+         self.num_video_frames = num_video_frames
+-        self.fps = fps
++        self.fps = fps or 0.0
+         self.mm_vision_select_layer = mm_vision_select_layer
+         self.mm_vision_select_feature = mm_vision_select_feature
+         self.mm_use_im_start_end = mm_use_im_start_end
+diff --git a/llava/model/language_model/builder.py b/llava/model/language_model/builder.py
+--- a/llava/model/language_model/builder.py
++++ b/llava/model/language_model/builder.py
+@@ -71,7 +71,7 @@
+ ) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
+     # print(model_name_or_path)
+     llm_cfg = AutoConfig.from_pretrained(model_name_or_path)
+-    llm_cfg._attn_implementation = attn_implementation
++    llm_cfg._attn_implementation = attn_implementation or "sdpa"
+     llm_cfg.model_max_length = model_max_length
+     if model_max_length is not None:
+         context_length_extension(llm_cfg)
+@@ -178,7 +178,8 @@
+         llm = AutoModelForCausalLM.from_pretrained(
+             model_name_or_path, config=llm_cfg, torch_dtype=eval(config.model_dtype), *args, **kwargs
+         )
+-    packing.patch(llm)
++    if llm_cfg._attn_implementation == "flash_attention_2":
++        packing.patch(llm)
+ 
+     # Locate the tokenizer.
+     llm_path = model_name_or_path
+diff --git a/llava/model/multimodal_encoder/builder.py b/llava/model/multimodal_encoder/builder.py
+--- a/llava/model/multimodal_encoder/builder.py
++++ b/llava/model/multimodal_encoder/builder.py
+@@ -20,10 +20,6 @@
+ 
+ from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
+ 
+-from .clip_encoder import CLIPVisionTower, CLIPVisionTowerS2
+-from .intern_encoder import InternVisionTower, InternVisionTowerS2
+-from .ps3_encoder import PS3VisionTower
+-from .radio_encoder import RADIOVisionTower
+ from .siglip_encoder import SiglipVisionTower, SiglipVisionTowerDynamicS2, SiglipVisionTowerS2
+ 
+ 
+@@ -43,16 +39,24 @@
+     use_dynamic_s2 = getattr(config, "dynamic_s2", False)
+ 
+     if config.ps3:
++        from .ps3_encoder import PS3VisionTower
++
+         vision_tower = PS3VisionTower(model_name_or_path, config)
+     elif "intern" in vision_tower_name.lower():
++        from .intern_encoder import InternVisionTower, InternVisionTowerS2
++
+         drop_path_rate = getattr(config, "drop_path_rate", 0.0)
+         if use_s2:
+             vision_tower = InternVisionTowerS2(model_name_or_path, config=config, drop_path_rate=drop_path_rate)
+         else:
+             vision_tower = InternVisionTower(model_name_or_path, config=config, drop_path_rate=drop_path_rate)
+     elif "radio" in vision_tower_name:
++        from .radio_encoder import RADIOVisionTower
++
+         vision_tower = RADIOVisionTower(model_name_or_path, config)
+     elif "clip" in vision_tower_name:
++        from .clip_encoder import CLIPVisionTower, CLIPVisionTowerS2
++
+         if use_s2:
+             vision_tower = CLIPVisionTowerS2(model_name_or_path, config)
+         else:
+diff --git a/llava/model/multimodal_encoder/siglip_encoder.py b/llava/model/multimodal_encoder/siglip_encoder.py
+--- a/llava/model/multimodal_encoder/siglip_encoder.py
++++ b/llava/model/multimodal_encoder/siglip_encoder.py
+@@ -28,7 +28,7 @@
+         # TODO(ligengl): why pass config here leading to errors?
+         self.vision_tower = SiglipVisionModel.from_pretrained(
+             model_name_or_path,
+-            attn_implementation="flash_attention_2",
++            attn_implementation="sdpa",
+             torch_dtype=eval(config.model_dtype),
+         )
+         self.image_processor = SiglipImageProcessor.from_pretrained(model_name_or_path)
+@@ -40,7 +40,7 @@
+         super().__init__(model_name_or_path, config)
+         self.vision_tower = SiglipVisionModel.from_pretrained(
+             model_name_or_path,
+-            attn_implementation="flash_attention_2",
++            attn_implementation="sdpa",
+             torch_dtype=eval(config.model_dtype),
+         )
+         self.image_processor = SiglipImageProcessor.from_pretrained(model_name_or_path)
+@@ -54,7 +54,7 @@
+         super().__init__(model_name_or_path, config)
+         self.vision_tower = SiglipVisionModel.from_pretrained(
+             model_name_or_path,
+-            attn_implementation="flash_attention_2",
++            attn_implementation="sdpa",
+             torch_dtype=eval(config.model_dtype),
+         )
+         self.image_processor = SiglipImageProcessor.from_pretrained(model_name_or_path)
+diff --git a/llava/model/multimodal_encoder/vision_encoder.py b/llava/model/multimodal_encoder/vision_encoder.py
+--- a/llava/model/multimodal_encoder/vision_encoder.py
++++ b/llava/model/multimodal_encoder/vision_encoder.py
+@@ -23,7 +23,6 @@
+ import torch.nn.functional as F
+ from accelerate.hooks import add_hook_to_module
+ from einops import rearrange
+-from s2wrapper import forward as multiscale_forward
+ from transformers import AutoConfig, PreTrainedModel
+ from transformers.image_processing_utils import BaseImageProcessor
+ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+@@ -221,6 +220,8 @@
+         return image_features
+ 
+     def forward(self, images):
++        from s2wrapper import forward as multiscale_forward
++
+         if type(images) is list:
+             image_features = []
+             for image in images:
+diff --git a/llava/train/sequence_parallel/globals.py b/llava/train/sequence_parallel/globals.py
+--- a/llava/train/sequence_parallel/globals.py
++++ b/llava/train/sequence_parallel/globals.py
+@@ -19,7 +19,6 @@
+ 
+ import os
+ 
+-import deepspeed.comm as dist
+ import torch
+ 
+ 
+@@ -43,6 +42,8 @@
+     """
+ 
+     def __init__(self, ulysses_degree, ring_degree, dp_degree, use_ulysses_low, ring_type):
++        import deepspeed.comm as dist
++
+         if not hasattr(self, "__initialized"):
+             super().__init__()
+             self.ulysses_degree = ulysses_degree
+@@ -158,6 +159,8 @@
+     sp_degree = sp_ring_degree x sp_ulysses_degree
+     """
+ 
++    import deepspeed.comm as dist
++
+     # first check torch distributed group init and set device accordingly;
+     # (DL) TODO: Whether this can be skipped in DeepSpeed.
+     if dist.is_initialized():

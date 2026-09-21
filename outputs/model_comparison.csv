@@ -1,0 +1,4 @@
+model,accuracy,num_questions,num_answered,source
+Qwen base,66.88%,4000,3971,outputs/qwen_base/qwen_base/result.csv
+Qwen fine-tuned,66.83%,4000,3964,outputs/qwen_sft/qwen_sft/result.csv
+VILA base,48.50%,4000,4000,outputs/vila_reva_v2/metrics.json
