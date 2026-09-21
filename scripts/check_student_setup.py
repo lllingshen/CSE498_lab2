@@ -6,12 +6,15 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONDA_BIN = Path(os.environ["CONDA_BIN"]) if os.environ.get("CONDA_BIN") else None
-TORCHRUN_BIN = Path(os.environ["TORCHRUN_BIN"]) if os.environ.get("TORCHRUN_BIN") else None
+
+def configured_path(name: str, default: Path) -> Path:
+    path = Path(os.environ.get(name) or default).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def status(ok: bool) -> str:
@@ -26,7 +29,7 @@ def display_path(path: Path) -> str:
 
 
 def check_file(path: Path, note: str) -> bool:
-    ok = path.exists()
+    ok = path.is_file() and path.stat().st_size > 0
     print(f"[{status(ok):7}] {display_path(path)} - {note}")
     return ok
 
@@ -46,16 +49,23 @@ def count_json_items(path: Path) -> int | None:
         return None
     if isinstance(data, list):
         return len(data)
-    if isinstance(data, dict) and "videos" in data:
+    if isinstance(data, dict) and isinstance(data.get("videos"), dict):
+        if any(
+            not isinstance(item, dict) or not isinstance(item.get("file_path"), str)
+            or not item["file_path"].strip() for item in data["videos"].values()
+        ):
+            return None
         return len(data["videos"])
     return None
 
 
 def resolve_video_reference(root: Path, reference: str) -> Path | None:
-    path = Path(reference)
+    normalized = reference.replace("\\", "/").removeprefix("./")
+    if not normalized.strip():
+        return None
+    path = Path(normalized)
     candidates = [path] if path.is_absolute() else [root / path]
 
-    normalized = reference.replace("\\", "/")
     for prefix in ("#dataset/ReVA_V2/", "#dataset/ReVA/", "ReVA_V2/", "ReVA/"):
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix) :]
@@ -63,7 +73,12 @@ def resolve_video_reference(root: Path, reference: str) -> Path | None:
             break
 
     for candidate in candidates:
-        if candidate.is_file() or candidate.is_dir():
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+        if candidate.is_dir() and any(
+            frame.is_file() and frame.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+            and frame.stat().st_size > 0 for frame in candidate.iterdir()
+        ):
             return candidate
     return None
 
@@ -78,11 +93,17 @@ def check_qwen_video_references(annotation_path: Path, video_root: Path) -> bool
         print(f"[MISSING] {display_path(annotation_path)} contains no training samples")
         return False
 
-    references = sorted({str(sample.get("video", "")) for sample in samples if sample.get("video")})
+    if any(
+        not isinstance(sample, dict) or not isinstance(sample.get("video"), str)
+        or not sample["video"].strip() for sample in samples
+    ):
+        print(f"[MISSING] {display_path(annotation_path)} has a missing or invalid video reference")
+        return False
+    references = sorted({sample["video"] for sample in samples})
     missing = [reference for reference in references if resolve_video_reference(video_root, reference) is None]
     if missing:
         print(
-            f"[MISSING] {len(missing)}/{len(references)} Qwen training video references do not exist "
+            f"[MISSING] {len(missing)}/{len(references)} Qwen training video references are missing or empty "
             f"under {display_path(video_root)}"
         )
         for reference in missing[:5]:
@@ -96,18 +117,22 @@ def check_reva_video_references(annotation_path: Path, video_root: Path) -> bool
     try:
         data = json.loads(annotation_path.read_text(encoding="utf-8"))
         videos = data["videos"]
+        if not isinstance(videos, dict) or not videos:
+            raise ValueError("contains no video records")
+        if any(
+            not isinstance(item, dict) or not isinstance(item.get("file_path"), str)
+            or not item["file_path"].strip() for item in videos.values()
+        ):
+            raise ValueError("has a missing or invalid file_path")
     except Exception as exc:
         print(f"[MISSING] could not read {display_path(annotation_path)}: {exc}")
         return False
 
-    references = sorted({str(item.get("file_path", "")) for item in videos.values() if item.get("file_path")})
-    if not references:
-        print(f"[MISSING] {display_path(annotation_path)} contains no video references")
-        return False
+    references = sorted({item["file_path"] for item in videos.values()})
     missing = [reference for reference in references if resolve_video_reference(video_root, reference) is None]
     if missing:
         print(
-            f"[MISSING] {len(missing)}/{len(references)} ReVA test video references do not exist "
+            f"[MISSING] {len(missing)}/{len(references)} ReVA test video references are missing or empty "
             f"under {display_path(video_root)}"
         )
         for reference in missing[:5]:
@@ -121,10 +146,15 @@ def main() -> None:
     print(f"Project root: {PROJECT_ROOT}")
     print("")
 
+    reva_root = configured_path("REVA_ROOT", PROJECT_ROOT / "data/reva_test")
+    reva_json = configured_path("REVA_JSON", reva_root / "test_set.json")
+    train_json = configured_path("REVA_TRAIN_JSON", PROJECT_ROOT / "data/reva_train/train_set.json")
+    qwen_json = configured_path("QWEN_TRAIN_JSON", PROJECT_ROOT / "data/qwen_train/train.json")
+    qwen_root = configured_path("QWEN_VIDEO_ROOT", PROJECT_ROOT / "data/qwen_train")
     required = [
-        (PROJECT_ROOT / "data/reva_train/train_set.json", "source annotations for training-data conversion"),
-        (PROJECT_ROOT / "data/qwen_train/train.json", "Qwen-format SFT data"),
-        (PROJECT_ROOT / "data/reva_test/test_set.json", "ReVA evaluation questions"),
+        (train_json, "source annotations for training-data conversion"),
+        (qwen_json, "Qwen-format SFT data"),
+        (reva_json, "ReVA evaluation questions"),
         (PROJECT_ROOT / "scripts/prepare_qwen_train_data.sh", "data conversion entry point"),
         (PROJECT_ROOT / "scripts/run_eval_qwen_base.sh", "base Qwen evaluation entry point"),
         (PROJECT_ROOT / "scripts/run_finetune_qwen.sh", "Qwen SFT/LoRA entry point"),
@@ -136,42 +166,55 @@ def main() -> None:
     all_ok = True
     for path, note in required:
         all_ok = check_file(path, note) and all_ok
-    all_ok = check_dir(PROJECT_ROOT / "data/qwen_train/videos", "videos referenced by Qwen-format SFT data") and all_ok
-    all_ok = check_dir(PROJECT_ROOT / "data/reva_test", "ReVA videos or extracted frame folders") and all_ok
-    all_ok = check_qwen_video_references(
-        PROJECT_ROOT / "data/qwen_train/train.json", PROJECT_ROOT / "data/qwen_train"
-    ) and all_ok
-    all_ok = check_reva_video_references(
-        PROJECT_ROOT / "data/reva_test/test_set.json", PROJECT_ROOT / "data/reva_test"
-    ) and all_ok
+    all_ok = check_dir(qwen_root, "Qwen training video root") and all_ok
+    all_ok = check_dir(reva_root, "ReVA evaluation video root") and all_ok
+    all_ok = check_qwen_video_references(qwen_json, qwen_root) and all_ok
+    all_ok = check_reva_video_references(reva_json, reva_root) and all_ok
 
     print("")
-    for path in [
-        PROJECT_ROOT / "data/reva_train/train_set.json",
-        PROJECT_ROOT / "data/qwen_train/train.json",
-        PROJECT_ROOT / "data/reva_test/test_set.json",
-    ]:
+    for path in [train_json, qwen_json, reva_json]:
         count = count_json_items(path)
-        if count is not None:
-            print(f"[INFO   ] {path.relative_to(PROJECT_ROOT)} contains {count} top-level items")
+        if count:
+            print(f"[INFO   ] {display_path(path)} contains {count} top-level items")
+        else:
+            print(f"[MISSING] {display_path(path)} has no valid annotation items")
+            all_ok = False
 
     print("")
-    command_fallbacks = {
-        "python3": None,
-        "conda": CONDA_BIN,
-        "torchrun": TORCHRUN_BIN,
-    }
-    for cmd, fallback in command_fallbacks.items():
-        found = shutil.which(cmd) is not None or (fallback is not None and fallback.exists())
-        location = shutil.which(cmd) or (str(fallback) if fallback is not None and fallback.exists() else "")
+    conda_env = os.environ.get("CONDA_ENV", "qwen2")
+    conda_bin = os.environ.get("CONDA_BIN") or "conda"
+    commands = ["python3"] + ([conda_bin] if conda_env else [])
+    for cmd in commands:
+        location = shutil.which(cmd)
+        found = location is not None
         suffix = f" ({location})" if location else ""
         print(f"[{status(found):7}] command `{cmd}`{suffix}")
+        all_ok = found and all_ok
+
+    try:
+        processes = int(os.environ.get("NPROC_PER_NODE", "1"))
+        if processes < 1:
+            raise ValueError
+    except ValueError:
+        print("[MISSING] NPROC_PER_NODE must be a positive integer")
+        processes = 1
+        all_ok = False
+    if processes > 1:
+        python = [conda_bin, "run", "-n", conda_env, "python3"] if conda_env else ["python3"]
+        try:
+            found = subprocess.run(
+                python + ["-c", "import importlib.util; raise SystemExit(importlib.util.find_spec('torch.distributed.run') is None)"],
+                capture_output=True, text=True, check=False,
+            ).returncode == 0
+        except OSError:
+            found = False
+        print(f"[{status(found):7}] module `torch.distributed.run` in the selected Python environment")
         all_ok = found and all_ok
 
     print("")
     for name in ["MODEL_PATH", "VILA_REPO", "CONDA_ENV"]:
         value = os.environ.get(name)
-        print(f"[INFO   ] {name}={value if value else '(not set)'}")
+        print(f"[INFO   ] {name}={value if value is not None else '(not set)'}")
 
     if not all_ok:
         raise SystemExit("\nSetup check found missing required files or commands.")

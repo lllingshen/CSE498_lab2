@@ -27,13 +27,13 @@ def extract_letter(text: str) -> str:
     """Extract one answer letter A-H from model output."""
     text = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", extract_answer(text), flags=re.I | re.S).strip()
     for prefix in (r"final\s+answer", r"answer|correct\s+(?:choice|option)|(?:choose|select|pick)"):
-        matches = list(re.finditer(
+        matches = [match for match in re.finditer(
             rf"\b(?:{prefix})\s*(?:is\s*|:\s*|=\s*)?(?:option\s*)?[\s(*`\[\"']*([A-H])\b",
             text, re.I,
-        ))
+        ) if not re.search(r"\b(?:not|never|don['’]t)\s*[*_`]*\s*$", text[:match.start()], re.I)]
         if matches:
             match = matches[-1]
-            if re.match(r"\s*(?:or|/|and)\s*[([]?[A-H]\b", text[match.end():], re.I):
+            if re.match(r"[\s)\]*_`\"']*(?:or\b|/|and\b)[\s([*_`\"']*[A-H]\b", text[match.end():], re.I):
                 return ""
             if match.group(1) == "a" and re.match(r"\s+[a-z]", text[match.end():]):
                 continue
@@ -41,6 +41,8 @@ def extract_letter(text: str) -> str:
     match = re.fullmatch(r"(?:option\s+)?[\s\W]*([A-H])[\s\W]*", text, re.I)
     if not match:
         match = re.match(r"^\s*(?:option\s+)?[(*`\[]*([A-H])[.)\]:-](?:\s|$)", text, re.I)
+    if match and re.match(r"[\s)\]*_`\"']*(?:or\b|/|and\b)[\s([*_`\"']*[A-H]\b", text[match.end():], re.I):
+        return ""
     return match.group(1).upper() if match else ""
 
 

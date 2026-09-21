@@ -6,7 +6,7 @@ I used Qwen3-VL-4B-Instruct and VILA1.5-3b, as specified in the assignment. Qwen
 
 All three evaluations use the same 4,000 official test questions from 1,014 videos, with at most four frames per video. All three use greedy decoding. The supplied pipelines use different prompts and output limits: Qwen is asked for reasoning and an answer tag, with up to 1,024 new tokens, while VILA is asked for a letter, with up to 128 new tokens. The score is correct answers divided by all 4,000 questions; missing or unparseable answers count as wrong. Completion is reported separately.
 
-The 200 training questions come from 17 VisDrone videos and cover all 11 question types. There are no repeated video/question pairs between this training subset and the test set. However, 16 training videos also occur in the test set, accounting for 68 test questions. ReVA uses a question-level split, so this is not a test entirely on unseen videos.
+The 200 training questions come from 17 VisDrone videos and cover all 11 question types. There are no repeated video/question pairs between this training subset and the test set. However, 16 training videos also occur in the test set, accounting for 68 test questions. This split is therefore not a test entirely on unseen videos.
 
 ## Results
 
@@ -17,6 +17,8 @@ The 200 training questions come from 17 VisDrone videos and cover all 11 questio
 | VILA base | 1,940 / 4,000 | 48.50% | 4,000 / 4,000 |
 
 All three runs generated a response for every test question. Qwen base had 29 unparseable answers and Qwen LoRA had 36; these were counted as wrong.
+
+Rescoring the saved raw responses with the corrected ambiguity and negation handling changed no parsed answers or scores. Each run contains the same 4,000 unique QA IDs as the official test annotations, with no missing or duplicate IDs. Subcategory counts sum to the overall totals.
 
 LoRA did not improve overall accuracy in this run: it corrected 93 previously wrong answers but changed 95 correct answers to wrong ones, leaving two fewer correct answers, or a decrease of 0.05 percentage points. The low training loss did not translate into better test accuracy. This was a small, one-epoch run with the supplied low learning rate, so the result does not show that LoRA cannot help with more suitable training settings. Qwen scored higher than VILA under these evaluation settings; their different prompts and output limits should be kept in mind when comparing them.
 
@@ -36,7 +38,7 @@ Options: A: 40–50; B: 10–20; C: 20–30; D: 30–40.
 |---|---|---|---|
 | B | D | C | B |
 
-**Likely issue: visual perception.** Both Qwen runs overcounted the cars. Fine-tuning changed the estimated range but did not make this answer correct. The first frame contains small and partly cropped cars. More cars enter the view as the camera moves, so the question requires counting specifically at 00:00. VILA selected the correct range.
+**Likely issue: visual perception.** Both Qwen runs selected ranges above the official 10–20 answer. Fine-tuning changed the estimated range but did not make this answer correct. The question requires counting specifically at 00:00, rather than across the clip. VILA selected the official range. The outputs alone do not establish why the counts differ.
 
 ### 2. A time interval: QA-000010
 
@@ -50,7 +52,7 @@ Options: A: 1–5 s; B: 0–4 s; C: 0–5 s; D: 2–5 s.
 |---|---|---|---|
 | C | C | C | D |
 
-**Likely issue: temporal reasoning.** VILA selected a later starting time and a shorter interval than the official answer. Both Qwen runs selected C. Four sampled frames provide limited evidence for exact start and end times. The group is not clearly visible in the first decoded frame, so the annotation's 0-second boundary should also be treated cautiously. Scores here still follow the official label.
+**Likely issue: temporal reasoning.** VILA selected a later starting time and a shorter interval than the official answer. Both Qwen runs selected C. The choices differ by only one or two seconds, while four sampled frames provide limited evidence for exact start and end times. A correct option does not by itself show that the model tracked visibility throughout the clip.
 
 ### 3. Matching the explanation to a letter: QA-000248
 

@@ -9,6 +9,20 @@ if [ -z "${MODEL_PATH:-}" ]; then
   exit 1
 fi
 
+if [ -n "${MODEL_BASE:-}" ]; then
+  if [ ! -f "$MODEL_PATH/adapter_config.json" ] || { [ ! -s "$MODEL_PATH/adapter_model.safetensors" ] && [ ! -s "$MODEL_PATH/adapter_model.bin" ]; }; then
+    echo "Invalid LoRA directory: $MODEL_PATH. Expected adapter_config.json and nonempty adapter_model.safetensors or adapter_model.bin." >&2
+    exit 1
+  fi
+fi
+
+if [ -d "$MODEL_PATH" ]; then
+  export MODEL_PATH="$(cd "$MODEL_PATH" && pwd)"
+fi
+if [ -n "${MODEL_BASE:-}" ] && [ -d "$MODEL_BASE" ]; then
+  export MODEL_BASE="$(cd "$MODEL_BASE" && pwd)"
+fi
+
 EVAL_NAME=${EVAL_NAME:-qwen_sft} \
 OUTPUT_DIR=${OUTPUT_DIR:-"$PROJECT_ROOT/outputs"} \
 bash "$PROJECT_ROOT/scripts/run_eval_reva.sh"

@@ -283,6 +283,50 @@ def load_transformers_vl_model(model_path: str, **kwargs):
     return AutoModelForVision2Seq.from_pretrained(model_path, use_sliding_window=True, **kwargs)
 
 
+def resolve_model_paths(model_path, model_base=None):
+    adapter_config_path = os.path.join(model_path, "adapter_config.json")
+    if not model_base and not os.path.exists(adapter_config_path):
+        return model_path, None
+    adapter_path = os.path.realpath(model_path)
+    try:
+        with open(adapter_config_path, encoding="utf-8") as file:
+            config = json.load(file)
+        if not isinstance(config, dict) or config.get("peft_type") != "LORA":
+            raise ValueError("adapter_config.json must contain a LoRA configuration")
+        if not any(os.path.isfile(os.path.join(adapter_path, name)) and
+                   os.path.getsize(os.path.join(adapter_path, name)) > 0
+                   for name in ("adapter_model.safetensors", "adapter_model.bin")):
+            raise ValueError("missing nonempty adapter_model.safetensors or adapter_model.bin")
+        from peft import PeftConfig
+
+        peft_config = PeftConfig.from_pretrained(adapter_path)
+        base_path = model_base or peft_config.base_model_name_or_path
+        if not isinstance(base_path, str) or not base_path.strip():
+            raise ValueError("set MODEL_BASE or base_model_name_or_path in adapter_config.json")
+    except Exception as exc:
+        raise ValueError(f"Invalid LoRA adapter directory {adapter_path}: {exc}") from exc
+    if os.path.isdir(base_path):
+        base_path = os.path.realpath(base_path)
+    return base_path, adapter_path
+
+
+def load_lora_model(base_path, adapter_path):
+    ranki_print(f"LoRA base model: {base_path}")
+    ranki_print(f"LoRA adapter: {adapter_path}")
+    try:
+        from peft import PeftModel
+
+        model = load_transformers_vl_model(
+            base_path, device_map="cuda", trust_remote_code=True,
+            torch_dtype=torch.bfloat16, attn_implementation="eager",
+        ).eval()
+        model = PeftModel.from_pretrained(model, adapter_path).eval()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load LoRA adapter {adapter_path} on base {base_path}: {exc}") from exc
+    ranki_print(f"LoRA adapter loaded successfully: {adapter_path}")
+    return model
+
+
 def run_inference(args):
     """
     Run inference on ActivityNet QA DataSet using the Video-ChatGPT model.
@@ -292,6 +336,9 @@ def run_inference(args):
     """
     use_flash_attn = True
     qwen_path = 'Qwen/Qwen3-VL-4B-Instruct'
+    base_model_path, adapter_path = resolve_model_paths(args.model_path, args.model_base)
+    if adapter_path is not None and args.backend != 'transformers':
+        raise ValueError("Local LoRA evaluation requires --backend transformers.")
     try:
         if args.backend == 'vllm':
             if vllm is None:
@@ -307,30 +354,19 @@ def run_inference(args):
                 llm_kwargs['max_model_len'] = args.max_model_len
             llm = vllm.LLM(**llm_kwargs)
         else:
-            adapter_config_path = os.path.join(args.model_path, "adapter_config.json")
-            adapter_path = args.model_path if os.path.exists(adapter_config_path) else None
-            base_model_path = args.model_base or args.model_path
-            if adapter_path is not None and args.model_base is None:
-                try:
-                    from peft import PeftConfig
-
-                    peft_config = PeftConfig.from_pretrained(adapter_path)
-                    base_model_path = peft_config.base_model_name_or_path or base_model_path
-                except Exception as exc:
-                    ranki_print(f"Could not infer base model from adapter config: {exc}")
-            model = load_transformers_vl_model(
-                base_model_path,
-                device_map="cuda",
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
-                attn_implementation="eager",
-            ).eval()
             if adapter_path is not None:
-                from peft import PeftModel
-
-                ranki_print(f"Loading LoRA adapter: {adapter_path}")
-                model = PeftModel.from_pretrained(model, adapter_path).eval()
+                model = load_lora_model(base_model_path, adapter_path)
+            else:
+                model = load_transformers_vl_model(
+                    base_model_path,
+                    device_map="cuda",
+                    trust_remote_code=True,
+                    torch_dtype=torch.bfloat16,
+                    attn_implementation="eager",
+                ).eval()
     except Exception as e:
+        if adapter_path is not None:
+            raise
         # Fallback: load from FSDP shards (for verl-trained checkpoints only)
         ranki_print(f'Standard model load failed: {e}')
         ranki_print('Attempting to load from FSDP shards...')
@@ -356,16 +392,7 @@ def run_inference(args):
         model.load_state_dict(state_dict)
         model.eval()
 
-    processor_path = args.model_base or args.model_path
-    adapter_config_path = os.path.join(args.model_path, "adapter_config.json")
-    if os.path.exists(adapter_config_path):
-        try:
-            from peft import PeftConfig
-
-            peft_config = PeftConfig.from_pretrained(args.model_path)
-            processor_path = args.model_base or peft_config.base_model_name_or_path or processor_path
-        except Exception as exc:
-            ranki_print(f"Could not infer processor path from adapter config: {exc}")
+    processor_path = base_model_path
     processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True, use_fast=True)
     ranki_print("Load model and processor success!")
 

@@ -32,6 +32,7 @@ export FORCE_QWENVL_VIDEO_READER=torchvision
 hf download Qwen/Qwen3-VL-4B-Instruct --local-dir "$MODEL_PATH"
 python scripts/download_reva.py
 bash scripts/prepare_qwen_train_data.sh
+python scripts/check_student_setup.py
 ```
 
 The download script retrieves the [official ReVA annotations](https://huggingface.co/datasets/ReVA-Benchmark/ReVA), the referenced videos, and creates the training video links.
@@ -42,7 +43,7 @@ The download script retrieves the [official ReVA annotations](https://huggingfac
 bash scripts/run_eval_qwen_base.sh
 ```
 
-Score: `outputs/qwen_base/qwen_base/result.csv`.
+Score: [Qwen base result.csv](outputs/qwen_base/qwen_base/result.csv).
 
 ## 3. Fine-tune Qwen with LoRA
 
@@ -64,7 +65,9 @@ MODEL_PATH="$PWD/outputs/qwen_reva_sft" \
 bash scripts/run_eval_qwen_finetuned.sh
 ```
 
-Score: `outputs/qwen_sft/qwen_sft/result.csv`.
+Score: [Qwen LoRA result.csv](outputs/qwen_sft/qwen_sft/result.csv).
+
+For this LoRA command, `MODEL_PATH` must contain a valid `adapter_config.json` and nonempty adapter weights. Invalid adapters stop evaluation instead of running the base model alone. For a full model checkpoint, omit `MODEL_BASE`.
 
 For a fresh repeat, use a new `EVAL_NAME`; to continue an interrupted evaluation with the same settings, use `RESUME=1`. For a new training run, set a new absolute `OUTPUT_DIR`.
 
@@ -93,7 +96,7 @@ PYTHONPATH="$PWD/work/VILA" python vila_eval/reva_v2.py \
 
 The small patch enables the SDPA inference path used in this experiment. VILA's original license is included in `patches/VILA-LICENSE`. VILA is evaluated without fine-tuning.
 
-Score: `outputs/vila_reva_v2/metrics.json`. Add `--resume` to continue an interrupted VILA run.
+Score: [VILA metrics.json](outputs/vila_reva_v2/metrics.json). Add `--resume` to continue an interrupted VILA run.
 
 ## 6. Compare results
 
@@ -103,5 +106,13 @@ cat outputs/model_comparison.csv
 ```
 
 Missing or unparseable answers count as wrong. The repository contains the saved comparison and all three score files. The seven tests supplied with the assignment are retained in `tests/`.
+
+Run the CPU-only tests with the Qwen environment:
+
+```bash
+env -u PYTHONPATH PYTHONNOUSERSITE=1 .venv-qwen/bin/python -m pytest -q
+```
+
+The final English report is [report.pdf](report.pdf), with LaTeX source in [report.tex](report.tex). Its numbers were recomputed from the saved raw responses, without rerunning the models. Compile it with `pdflatex report.tex` twice, or import it into Overleaf.
 
 The main completed files are `scripts/build_qwen_train_data.py`, `reva_eval/data/rsvidqa/prepare_reva_v2_test_set.py`, `scripts/score_reva_predictions.py`, and `vila_eval/reva_v2.py`. Qwen training and evaluation also include the local compatibility changes needed for this run. Original source notices are retained.

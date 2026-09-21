@@ -1,0 +1,167 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl}
+\title{CSE498 Lab 2: ReVA Video Question Answering}
+\author{Ling Shen}
+\date{}
+
+\begin{document}
+\maketitle
+\noindent\textbf{Project repository:} \url{https://github.com/lllingshen/CSE498_lab2}
+
+\section{Setup and implementation}
+
+This lab compares Qwen3-VL-4B-Instruct before and after LoRA fine-tuning,
+with VILA1.5-3b as a second baseline. I used the course starter code\footnote{\url{https://github.com/likaiw2/VLM_evaluating_finetuing}}
+and the official ReVA annotations.\footnote{\url{https://huggingface.co/datasets/ReVA-Benchmark/ReVA}}
+The training subset contains the first 200 training questions. All three
+models were evaluated on the same 4,000 test questions from 1,014 videos.
+
+The annotation converter produces a conversation for each training question:
+the user turn contains a video reference, the question, and its lettered
+options; the assistant turn contains the correct letter inside an
+\texttt{<answer>} tag. Test preparation retains each question's QA ID,
+video reference, options, answer, and subcategory. The Qwen pipeline evaluates
+the base model, trains a LoRA adapter, and evaluates that adapter on the same
+test set. VILA uses its own video-question-answering adapter and is evaluated
+without fine-tuning.
+
+I completed the core assignment functions in these files:
+\begin{itemize}
+\setlength{\itemsep}{0pt}
+\item \path{scripts/build_qwen_train_data.py}: converts annotations into
+video-question conversations and answer targets.
+\item \path{reva_eval/data/rsvidqa/prepare_reva_v2_test_set.py}: prepares
+test questions with stable QA IDs and video references.
+\item \path{scripts/score_reva_predictions.py}: parses Qwen answers and
+scores every ground-truth question.
+\item \path{vila_eval/reva_v2.py}: loads ReVA questions, builds VILA
+prompts, parses answers, and summarizes results.
+\end{itemize}
+Other local execution changes include
+\path{scripts/run_eval_qwen_finetuned.sh},
+\path{reva_eval/inference_vllm_origin_number.py}, and
+\path{scripts/check_student_setup.py}. These check LoRA adapter loading,
+handle video metadata, and support the local environment and data paths.
+Single-GPU SDPA training support is implemented in
+\path{qwen_finetune/qwenvl/train/train_qwen.py} and
+\path{qwen_finetune/scripts/sft_7b.sh}.
+Focused regression checks are in \path{tests/test_local_fixes.py}.
+
+The saved training arguments record one epoch, batch size 1, gradient
+accumulation of 4, and learning rate $2\times10^{-7}$. LoRA uses rank 8,
+alpha 16, and dropout 0 on the attention query, key, value, and output
+projections. The training state records 50 optimizer steps and mean training
+loss 0.4115. The saved evaluation configuration points to the trained adapter
+and the Qwen base model; the run log records adapter loading followed by
+successful model and processor loading.
+
+The recorded experiments use a maximum of four frames per video and greedy
+decoding. Qwen receives a request for reasoning followed by an answer tag,
+with a maximum of 1,024 output tokens. VILA receives a request for only the
+option letter, with a maximum of 128 output tokens. These are the settings
+used for the saved runs, rather than recommendations for further tuning.
+Reproduction commands are in \texttt{README.md}.
+
+Scores were recomputed from the saved raw responses. The saved evaluation
+ground truth matches the official test annotations in QA IDs, questions,
+options, labels, video references, and subcategories. Each run has all 4,000
+unique IDs and no duplicates. The scoring rule is
+\[
+  \mathrm{Accuracy} =
+  \frac{\text{number of correct answers}}{\text{all ground-truth questions}}.
+\]
+Missing or unparseable answers count as wrong. Completion means that an
+answer can be parsed into an option letter; it does not mean the answer is
+correct. An explicit final answer takes precedence over distractors mentioned
+in the explanation.
+
+\section{Results and interpretation}
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+Model & Correct / total & Accuracy & Parseable / total \\
+\midrule
+Qwen base & 2,675 / 4,000 & 66.88\% & 3,971 / 4,000 \\
+Qwen LoRA & 2,673 / 4,000 & 66.83\% & 3,964 / 4,000 \\
+VILA base & 1,940 / 4,000 & 48.50\% & 4,000 / 4,000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+LoRA did not improve overall accuracy in this experiment. It produced two
+fewer correct answers, a decrease of 0.05 percentage points. A direct
+question-by-question comparison shows that 93 previously wrong answers
+became correct, while 95 correct answers became wrong. All models generated
+responses for all questions, but 29 base-Qwen responses and 36 LoRA responses
+were unparseable and therefore counted as incorrect.
+
+There were some differences by subcategory. In Geometric Relation, Qwen
+improved from 270/400 (67.50\%) to 280/400 (70.00\%) after fine-tuning.
+Temporal Grounding remained difficult: the base model answered 252/640
+(39.38\%) correctly, compared with 250/640 (39.06\%) after fine-tuning.
+These local changes did not yield an overall improvement. The training loss
+and these scores alone do not establish overfitting or the cause of the
+difference. Qwen outperformed VILA under the settings used here, with the
+prompt and output-budget differences noted above.
+
+\section{Three qualitative examples}
+
+\paragraph{1. Counting cars: QA-000005 (visual perception).}
+The question asks how many cars are visible in the parking lot at 00:00.
+The options are A: 40--50, B: 10--20, C: 20--30, and D: 30--40.
+The official answer is \textbf{B}; Qwen base predicts \textbf{D}, Qwen LoRA
+predicts \textbf{C}, and VILA predicts \textbf{B}.
+Both Qwen responses select a count range above the official answer. The
+LoRA response changes the range but remains incorrect. This is consistent
+with a visual counting difficulty, although the outputs alone do not show
+why the models differ. The timestamp matters: the question asks for the
+count at the beginning, not a count accumulated across the video.
+
+\newpage
+\paragraph{2. Visibility interval: QA-000010 (temporal reasoning).}
+The question asks how long a group of people remains visible in the parking
+lot. The options are A: 1--5 s, B: 0--4 s, C: 0--5 s, and D: 2--5 s.
+The official answer is \textbf{C}; Qwen base and Qwen LoRA both predict
+\textbf{C}, while VILA predicts \textbf{D}.
+VILA selects a later starting time and a shorter duration than the official
+answer. The options differ by only one or two seconds, making this a useful
+temporal-reasoning example. With only four sampled frames, the input provides
+limited evidence for precise boundaries. Choosing the correct interval does
+not by itself demonstrate continuous tracking of the group.
+
+\paragraph{3. Viewpoint and answer mapping: QA-000248 (option parsing).}
+The question asks for the camera viewpoint. The options are A: high angle
+($>45^\circ$), B: top-down ($90^\circ$), C: high angle ($<45^\circ$), and
+D: ground-level ($0^\circ$). The official answer is \textbf{A}; Qwen base
+predicts \textbf{C}, Qwen LoRA predicts \textbf{A}, and VILA predicts
+\textbf{B}.
+The base model's explanation includes ``high angle ($>45$ degrees)'',
+but its final tag is \texttt{<answer>C</answer>}. This is a model
+answer-mapping inconsistency, not a scorer error: the final letter must be
+scored as C even though the explanation describes option A. The LoRA
+response aligns its explanation with A. This one corrected example does
+not establish an overall benefit from fine-tuning.
+
+\section{Limitations and conclusion}
+
+This was a small, one-epoch training run, and the four-frame budget limits
+the available video information. The models also use different prompts and
+output limits. The 200 training questions come from 17 videos; 16 of those
+videos also occur in the test set, covering 68 test questions. No identical
+video/question pair occurs in both this training subset and the test set,
+but the evaluation is not entirely on unseen videos. These limitations do
+not establish the cause of any score change.
+
+The experiment shows how to convert video annotations, train and load a
+LoRA adapter, and compare models using a common test denominator. Qwen
+performed better than VILA in this run, while the small LoRA fine-tuning
+run left Qwen's overall accuracy essentially unchanged.
+
+\end{document}
